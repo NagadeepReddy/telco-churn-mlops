@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+
+mlruns/
+mlruns.db
+
+.env
+
+*.log
+
+.vscode/
+
+data/
+model/

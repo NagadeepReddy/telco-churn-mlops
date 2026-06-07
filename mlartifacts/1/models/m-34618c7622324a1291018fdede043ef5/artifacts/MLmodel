@@ -1,0 +1,42 @@
+artifact_path: mlflow-artifacts:/1/models/m-34618c7622324a1291018fdede043ef5/artifacts
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.pkl
+    predict_fn: predict
+    python_version: 3.13.5
+  sklearn:
+    code: null
+    pickled_model: model.pkl
+    serialization_format: cloudpickle
+    sklearn_version: 1.9.0
+    skops_trusted_types: null
+is_signature_from_type_hint: false
+mlflow_version: 3.13.0
+model_id: m-34618c7622324a1291018fdede043ef5
+model_size_bytes: 270321
+model_uuid: m-34618c7622324a1291018fdede043ef5
+prompts: null
+run_id: 9cd8a880b00349bb8734e640edf76370
+signature:
+  inputs: '[{"type": "long", "name": "gender", "required": true}, {"type": "long",
+    "name": "SeniorCitizen", "required": true}, {"type": "long", "name": "Partner",
+    "required": true}, {"type": "long", "name": "Dependents", "required": true}, {"type":
+    "long", "name": "tenure", "required": true}, {"type": "long", "name": "PhoneService",
+    "required": true}, {"type": "long", "name": "MultipleLines", "required": true},
+    {"type": "long", "name": "InternetService", "required": true}, {"type": "long",
+    "name": "OnlineSecurity", "required": true}, {"type": "long", "name": "OnlineBackup",
+    "required": true}, {"type": "long", "name": "DeviceProtection", "required": true},
+    {"type": "long", "name": "TechSupport", "required": true}, {"type": "long", "name":
+    "StreamingTV", "required": true}, {"type": "long", "name": "StreamingMovies",
+    "required": true}, {"type": "long", "name": "Contract", "required": true}, {"type":
+    "long", "name": "PaperlessBilling", "required": true}, {"type": "long", "name":
+    "PaymentMethod", "required": true}, {"type": "double", "name": "MonthlyCharges",
+    "required": true}, {"type": "double", "name": "TotalCharges", "required": true}]'
+  outputs: '[{"type": "tensor", "tensor-spec": {"dtype": "int64", "shape": [-1]}}]'
+  params: null
+type_hint_from_example: false
+utc_time_created: '2026-06-07 02:38:24.833544'
