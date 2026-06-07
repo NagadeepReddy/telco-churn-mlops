@@ -3,13 +3,13 @@ __pycache__/
 *.pyc
 
 mlruns/
+mlartifacts/
 mlruns.db
 
+model/
+data/
+
 .env
-
-*.log
-
 .vscode/
 
-data/
-model/
+*.log
