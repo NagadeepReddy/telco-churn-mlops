@@ -6,16 +6,17 @@ on:
       - main
 
 jobs:
-
   test-and-build:
 
     runs-on: ubuntu-latest
 
     steps:
 
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
@@ -24,9 +25,18 @@ jobs:
           pip install -r requirements.txt
           pip install pytest
 
+      - name: Download Dataset
+        run: |
+          mkdir -p data
+          curl -L "https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/data/Telco-Customer-Churn.csv" -o data/telco_churn.csv
+
       - name: Train Model
         run: |
           python train.py
+
+      - name: Verify Model Exists
+        run: |
+          ls -la model
 
       - name: Run Tests
         run: |
