@@ -1,0 +1,215 @@
+# ── k8s/deployment.yaml ───────────────────────────────────────────────────────
+# Deploys the churn model FastAPI server on Kubernetes.
+#
+# BEFORE APPLYING:
+#   Replace YOUR_ACCOUNT_ID with your real AWS account ID
+#   Example: 123456789012.dkr.ecr.us-east-1.amazonaws.com/churn-model:v1
+#
+# Apply:
+#   kubectl apply -f k8s/deployment.yaml -n ml-production
+#
+# Check:
+#   kubectl get pods -n ml-production
+#   kubectl get svc -n ml-production
+#
+# Test:
+#   kubectl port-forward svc/churn-model-svc 8888:80 -n ml-production
+#   curl http://localhost:8888/health
+# ─────────────────────────────────────────────────────────────────────────────
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: churn-model-v1
+  namespace: ml-production
+  labels:
+    app: churn-model
+    version: v1
+    team: mlops
+spec:
+  # Run 2 copies for high availability
+  # If one pod crashes, the other still serves traffic
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: churn-model
+      version: v1
+
+  # Rolling update strategy — no downtime during deployments
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1        # can temporarily have 3 pods during update
+      maxUnavailable: 0  # never go below 2 pods during update
+
+  template:
+    metadata:
+      labels:
+        app: churn-model
+        version: v1
+      annotations:
+        # Prometheus will scrape this pod at /metrics every 15s
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "8080"
+        prometheus.io/path:   "/metrics"
+
+    spec:
+      containers:
+        - name: churn-model
+          # REPLACE with your real ECR URI
+          # Format: ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/REPO:TAG
+          image: 112277641321.dkr.ecr.us-east-1.amazonaws.com/churn-model:v1
+
+          # Always pull latest — never use cached image from node
+          imagePullPolicy: Always
+
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+
+          env:
+            - name: MODEL_VERSION
+              value: "v1"
+            - name: MODEL_PATH
+              value: "model/churn_model.pkl"
+
+          # Resource limits — very important
+          # requests = minimum guaranteed
+          # limits = maximum allowed (pod is killed if it exceeds this)
+          resources:
+            requests:
+              cpu:    250m     # 0.25 CPU cores
+              memory: 512Mi    # 512 MB RAM
+            limits:
+              cpu:    "1"      # max 1 CPU core
+              memory: 1Gi      # max 1 GB RAM
+
+          # Liveness probe — Kubernetes checks this every 15s
+          # If it fails 3 times: pod is restarted
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30  # wait 30s before first check (model loading)
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Readiness probe — Kubernetes checks this before sending traffic
+          # Pod only receives requests when this returns 200
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Security: run as non-root user
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+
+          # Writable temp dir
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+      # Spread pods across availability zones for fault tolerance
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: churn-model
+
+      # Give Kubernetes 30s to drain connections before killing pod
+      terminationGracePeriodSeconds: 30
+
+---
+# Service — stable network address for the pods
+# Other services and the ingress talk to this, not individual pods
+apiVersion: v1
+kind: Service
+metadata:
+  name: churn-model-svc
+  namespace: ml-production
+  labels:
+    app: churn-model
+spec:
+  selector:
+    app: churn-model   # routes to ALL pods with this label
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+  type: ClusterIP      # internal only — exposed via Ingress below
+
+---
+# Ingress — exposes the model to the internet via AWS ALB
+# Requires: AWS Load Balancer Controller installed on EKS
+# Install: helm install aws-load-balancer-controller eks/aws-load-balancer-controller
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: churn-model-ingress
+  namespace: ml-production
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "30"
+    # Rate limiting — max 1000 requests per minute per IP
+    alb.ingress.kubernetes.io/load-balancer-attributes: |
+      routing.http2.enabled=true
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /predict
+            pathType: Prefix
+            backend:
+              service:
+                name: churn-model-svc
+                port:
+                  number: 80
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: churn-model-svc
+                port:
+                  number: 80
+          - path: /ready
+            pathType: Exact
+            backend:
+              service:
+                name: churn-model-svc
+                port:
+                  number: 80
+          - path: /metrics
+            pathType: Exact
+            backend:
+              service:
+                name: churn-model-svc
+                port:
+                  number: 80
+          - path: /info
+            pathType: Exact
+            backend:
+              service:
+                name: churn-model-svc
+                port:
+                  number: 80

@@ -1,0 +1,58 @@
+# ── k8s/namespace.yaml ────────────────────────────────────────────────────────
+# Creates namespaces and sets resource limits.
+# Apply this FIRST before anything else.
+#
+# Apply:
+#   kubectl apply -f k8s/namespace.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Production namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ml-production
+  labels:
+    environment: production
+    team: mlops
+
+---
+# Staging namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ml-staging
+  labels:
+    environment: staging
+    team: mlops
+
+---
+# Resource quota for production — prevents runaway costs
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: ml-production-quota
+  namespace: ml-production
+spec:
+  hard:
+    requests.cpu:    "4"      # total CPU requested by all pods
+    requests.memory: 8Gi      # total RAM requested by all pods
+    limits.cpu:      "8"      # total CPU limit for all pods
+    limits.memory:   16Gi     # total RAM limit for all pods
+    pods:            "20"     # max number of pods
+
+---
+# Default resource limits — pods without limits get these
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: ml-production-limits
+  namespace: ml-production
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu:    500m
+        memory: 512Mi
+      defaultRequest:
+        cpu:    100m
+        memory: 128Mi

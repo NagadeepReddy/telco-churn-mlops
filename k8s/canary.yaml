@@ -1,0 +1,115 @@
+# ── k8s/canary.yaml ───────────────────────────────────────────────────────────
+# Canary deployment — runs v2 alongside v1
+#
+# Traffic split:
+#   v1 has 2 replicas → gets ~67% of traffic
+#   v2 has 1 replica  → gets ~33% of traffic
+#
+# For exact 90/10 split: use Seldon Core (see main project)
+# For simple practice: this ratio approach works fine
+#
+# BEFORE APPLYING:
+#   Replace YOUR_ACCOUNT_ID with your real AWS account ID
+#   Build and push v2 image first:
+#     docker build -t churn-model:v2 .
+#     docker tag churn-model:v2 YOUR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/churn-model:v2
+#     docker push YOUR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/churn-model:v2
+#
+# Apply:
+#   kubectl apply -f k8s/canary.yaml -n ml-production
+#
+# Check pods (should see 2 v1 + 1 v2):
+#   kubectl get pods -n ml-production --show-labels
+#
+# PROMOTE v2 to 100%:
+#   kubectl scale deployment churn-model-v1 --replicas=0 -n ml-production
+#   kubectl scale deployment churn-model-v2 --replicas=3 -n ml-production
+#
+# ROLLBACK — remove v2:
+#   kubectl delete deployment churn-model-v2 -n ml-production
+# ─────────────────────────────────────────────────────────────────────────────
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: churn-model-v2
+  namespace: ml-production
+  labels:
+    app: churn-model
+    version: v2
+    team: mlops
+    canary: "true"
+spec:
+  replicas: 1    # 1 replica = roughly 33% of traffic when v1 has 2
+
+  selector:
+    matchLabels:
+      app: churn-model
+      version: v2
+
+  template:
+    metadata:
+      labels:
+        app: churn-model
+        version: v2
+        canary: "true"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "8080"
+        prometheus.io/path:   "/metrics"
+
+    spec:
+      containers:
+        - name: churn-model
+          # REPLACE with your real ECR URI with v2 tag
+          image: 112277641321.dkr.ecr.us-east-1.amazonaws.com/churn-model:v2
+          imagePullPolicy: Always
+
+          ports:
+            - containerPort: 8080
+              name: http
+
+          env:
+            - name: MODEL_VERSION
+              value: "v2"    # important: different from v1 so you can see in Prometheus
+            - name: MODEL_PATH
+              value: "model/churn_model.pkl"
+
+          resources:
+            requests:
+              cpu:    250m
+              memory: 512Mi
+            limits:
+              cpu:    "1"
+              memory: 1Gi
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            allowPrivilegeEscalation: false
+
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+      terminationGracePeriodSeconds: 30
