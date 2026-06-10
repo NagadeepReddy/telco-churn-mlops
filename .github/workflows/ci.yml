@@ -35,7 +35,7 @@ on:
 env:
   AWS_REGION:   us-east-1
   ECR_REPO:     churn-model
-  EKS_CLUSTER:  mlops-cluster
+  EKS_CLUSTER:  churn-mlops
   NAMESPACE:    ml-production
   DEPLOYMENT:   churn-model-v1
 
@@ -254,7 +254,7 @@ jobs:
           PRED=$(curl -sf --max-time 10 \
             -X POST http://localhost:19090/predict \
             -H "Content-Type: application/json" \
-            -d '{"customer": {"tenure": 12, "MonthlyCharges": 65.0}}' \
+            -d '{"tenure":12,"MonthlyCharges":65,"Contract":"Month-to-month"}' \
             || echo "FAILED")
           echo "Predict response: ${PRED}"
 

@@ -1,0 +1,77 @@
+name: CD Pipeline
+
+on:
+push:
+branches:
+- main
+
+env:
+AWS_REGION: us-east-1
+ECR_REPOSITORY: churn-model
+EKS_CLUSTER: churn-mlops
+K8S_NAMESPACE: ml-production
+DEPLOYMENT: churn-model-v1
+
+jobs:
+
+deploy:
+
+```
+runs-on: ubuntu-latest
+
+steps:
+
+  - name: Checkout Code
+    uses: actions/checkout@v4
+
+  - name: Configure AWS Credentials
+    uses: aws-actions/configure-aws-credentials@v4
+    with:
+      aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      aws-region: ${{ env.AWS_REGION }}
+
+  - name: Login to Amazon ECR
+    id: login-ecr
+    uses: aws-actions/amazon-ecr-login@v2
+
+  - name: Build Docker Image
+    run: |
+      docker build -t churn-model:${{ github.sha }} .
+
+  - name: Tag Docker Image
+    run: |
+      docker tag churn-model:${{ github.sha }} \
+      112277641321.dkr.ecr.us-east-1.amazonaws.com/churn-model:${{ github.sha }}
+
+      docker tag churn-model:${{ github.sha }} \
+      112277641321.dkr.ecr.us-east-1.amazonaws.com/churn-model:latest
+
+  - name: Push Docker Image
+    run: |
+      docker push 112277641321.dkr.ecr.us-east-1.amazonaws.com/churn-model:${{ github.sha }}
+      docker push 112277641321.dkr.ecr.us-east-1.amazonaws.com/churn-model:latest
+
+  - name: Configure kubectl
+    run: |
+      aws eks update-kubeconfig \
+        --region us-east-1 \
+        --name churn-mlops
+
+  - name: Deploy to EKS
+    run: |
+      kubectl set image deployment/churn-model-v1 \
+      churn-model=112277641321.dkr.ecr.us-east-1.amazonaws.com/churn-model:latest \
+      -n ml-production
+
+  - name: Wait for Rollout
+    run: |
+      kubectl rollout status deployment/churn-model-v1 \
+      -n ml-production \
+      --timeout=300s
+
+  - name: Verify Deployment
+    run: |
+      kubectl get pods -n ml-production
+      kubectl get deployment -n ml-production
+```

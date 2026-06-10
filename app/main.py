@@ -118,7 +118,8 @@ def home():
 def health():
     return {
         "status": "alive",
-        "model_version": MODEL_VERSION
+        "model_version": MODEL_VERSION,
+        "build": "cd-test-v1"
     }
 
 # --------------------------------------------------
