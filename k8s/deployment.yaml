@@ -29,7 +29,7 @@ metadata:
 spec:
   # Run 2 copies for high availability
   # If one pod crashes, the other still serves traffic
-  replicas: 2
+  replicas: 1
 
   selector:
     matchLabels:

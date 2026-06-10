@@ -1,3 +1,29 @@
+# ── .github/workflows/ci.yml ──────────────────────────────────────────────────
+# Complete CI/CD pipeline for the churn prediction model.
+#
+# Triggers on: push to main branch
+#
+# Jobs:
+#   1. test       — run pytest, block deployment if tests fail
+#   2. build      — build Docker image, push to ECR
+#   3. deploy     — update EKS deployment with new image
+#
+# SETUP (do these before the pipeline will work):
+#   1. Go to GitHub repo → Settings → Secrets and variables → Actions
+#   2. Add these secrets:
+#        AWS_ACCESS_KEY_ID      ← your IAM user access key
+#        AWS_SECRET_ACCESS_KEY  ← your IAM user secret key
+#
+# WHAT HAPPENS WHEN YOU PUSH:
+#   push to main
+#     → tests run (if fail: STOP, nothing deploys)
+#     → docker build
+#     → docker push to ECR
+#     → kubectl set image (new image deployed to EKS)
+#     → rollout status waits until all pods are running
+#     → smoke test confirms model is alive
+# ─────────────────────────────────────────────────────────────────────────────
+
 name: CI Pipeline
 
 on:
@@ -5,43 +31,266 @@ on:
     branches:
       - main
 
-jobs:
-  test-and-build:
+# ── Environment variables used across all jobs ────────────────────
+env:
+  AWS_REGION:   us-east-1
+  ECR_REPO:     churn-model
+  EKS_CLUSTER:  mlops-cluster
+  NAMESPACE:    ml-production
+  DEPLOYMENT:   churn-model-v1
 
+jobs:
+
+# ══════════════════════════════════════════════════════════════════
+# JOB 1 — Test
+# Runs pytest. If any test fails, pipeline stops here.
+# Nothing gets built or deployed until all tests pass.
+# ══════════════════════════════════════════════════════════════════
+  test:
+    name: Run Tests
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install Dependencies
         run: |
+          pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest
 
-      - name: Download Dataset
+      - name: Download Training Data
         run: |
           mkdir -p data
-          curl -L "https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/data/Telco-Customer-Churn.csv" -o data/telco_churn.csv
+          curl -L \
+            "https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/data/Telco-Customer-Churn.csv" \
+            -o data/telco_churn.csv
+          echo "Downloaded $(wc -l < data/telco_churn.csv) rows"
 
       - name: Train Model
         run: |
           python train.py
 
-      - name: Verify Model Exists
+      - name: Verify Model File Exists
         run: |
-          ls -la model
+          ls -lh model/churn_model.pkl
+          echo "Model file exists ✓"
 
-      - name: Run Tests
+      - name: Run All Tests
         run: |
-          pytest tests/ -v
+          pytest tests/ -v --tb=short
+
+      - name: Print Test Summary
+        if: always()
+        run: |
+          echo "Tests complete. Check output above for PASSED/FAILED."
+
+
+# ══════════════════════════════════════════════════════════════════
+# JOB 2 — Build and Push Docker Image
+# Only runs if all tests passed.
+# Builds Docker image and pushes to AWS ECR.
+# ══════════════════════════════════════════════════════════════════
+  build:
+    name: Build and Push to ECR
+    runs-on: ubuntu-latest
+    needs: test       # only runs if test job succeeded
+
+    # Output the image tag so the deploy job can use it
+    outputs:
+      image_tag: ${{ steps.set_tag.outputs.image_tag }}
+      ecr_registry: ${{ steps.login_ecr.outputs.registry }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set Image Tag
+        id: set_tag
+        run: |
+          # Use short git commit hash as image tag
+          # Example: abc1234
+          IMAGE_TAG=$(git rev-parse --short HEAD)
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "Image tag: ${IMAGE_TAG}"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login_ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Download Data and Train Model
+        run: |
+          mkdir -p data
+          curl -L \
+            "https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/data/Telco-Customer-Churn.csv" \
+            -o data/telco_churn.csv
+          python train.py
 
       - name: Build Docker Image
+        env:
+          REGISTRY: ${{ steps.login_ecr.outputs.registry }}
         run: |
-          docker build -t churn-model:test .
+          IMAGE_TAG=${{ steps.set_tag.outputs.image_tag }}
+          FULL_IMAGE=${REGISTRY}/${{ env.ECR_REPO }}:${IMAGE_TAG}
+
+          docker build -t ${FULL_IMAGE} .
+          echo "Built: ${FULL_IMAGE}"
+
+      - name: Push to ECR
+        env:
+          REGISTRY: ${{ steps.login_ecr.outputs.registry }}
+        run: |
+          IMAGE_TAG=${{ steps.set_tag.outputs.image_tag }}
+          FULL_IMAGE=${REGISTRY}/${{ env.ECR_REPO }}:${IMAGE_TAG}
+
+          # Push with specific tag
+          docker push ${FULL_IMAGE}
+
+          # Also push as :latest
+          docker tag ${FULL_IMAGE} ${REGISTRY}/${{ env.ECR_REPO }}:latest
+          docker push ${REGISTRY}/${{ env.ECR_REPO }}:latest
+
+          echo "Pushed: ${FULL_IMAGE}"
+          echo "Pushed: ${REGISTRY}/${{ env.ECR_REPO }}:latest"
+
+
+# ══════════════════════════════════════════════════════════════════
+# JOB 3 — Deploy to EKS
+# Only runs if build succeeded.
+# Updates the Kubernetes deployment with the new Docker image.
+# ══════════════════════════════════════════════════════════════════
+  deploy:
+    name: Deploy to EKS
+    runs-on: ubuntu-latest
+    needs: build     # only runs if build job succeeded
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Update kubectl config for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --name ${{ env.EKS_CLUSTER }} \
+            --region ${{ env.AWS_REGION }}
+          echo "kubectl configured for EKS cluster: ${{ env.EKS_CLUSTER }}"
+
+      - name: Login to ECR
+        id: login_ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Deploy new image to EKS
+        env:
+          REGISTRY:  ${{ needs.build.outputs.ecr_registry }}
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+        run: |
+          FULL_IMAGE=${REGISTRY}/${{ env.ECR_REPO }}:${IMAGE_TAG}
+          echo "Deploying: ${FULL_IMAGE}"
+
+          # Update the deployment image
+          # Kubernetes will do a rolling update:
+          # - Start new pods with new image
+          # - Wait for them to be ready
+          # - Remove old pods
+          kubectl set image deployment/${{ env.DEPLOYMENT }} \
+            churn-model=${FULL_IMAGE} \
+            -n ${{ env.NAMESPACE }}
+
+          echo "Deployment updated. Waiting for rollout..."
+
+      - name: Wait for rollout to complete
+        run: |
+          # Wait up to 5 minutes for all pods to be running the new image
+          kubectl rollout status deployment/${{ env.DEPLOYMENT }} \
+            -n ${{ env.NAMESPACE }} \
+            --timeout=300s
+
+          echo "Rollout complete ✓"
+
+      - name: Show pods after deployment
+        run: |
+          echo "Current pods:"
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app=churn-model
+
+      - name: Smoke test — confirm model is responding
+        run: |
+          echo "Waiting 20s for pods to stabilize..."
+          sleep 20
+
+          # Port-forward to test without exposing to internet
+          kubectl port-forward svc/churn-model-svc 19090:80 \
+            -n ${{ env.NAMESPACE }} &>/dev/null &
+          PF_PID=$!
+          sleep 5
+
+          # Health check
+          RESPONSE=$(curl -sf --max-time 10 http://localhost:19090/health || echo "FAILED")
+          echo "Health response: ${RESPONSE}"
+
+          # Check the model is actually returning predictions
+          PRED=$(curl -sf --max-time 10 \
+            -X POST http://localhost:19090/predict \
+            -H "Content-Type: application/json" \
+            -d '{"customer": {"tenure": 12, "MonthlyCharges": 65.0}}' \
+            || echo "FAILED")
+          echo "Predict response: ${PRED}"
+
+          kill $PF_PID 2>/dev/null || true
+
+          # Fail the pipeline if either check failed
+          if echo "${RESPONSE}" | grep -q "alive"; then
+            echo "Smoke test PASSED ✓"
+          else
+            echo "Smoke test FAILED ✗"
+            echo "Running rollback..."
+            kubectl rollout undo deployment/${{ env.DEPLOYMENT }} -n ${{ env.NAMESPACE }}
+            exit 1
+          fi
+
+      - name: Print deployment summary
+        if: success()
+        env:
+          REGISTRY:  ${{ needs.build.outputs.ecr_registry }}
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+        run: |
+          echo ""
+          echo "════════════════════════════════════════"
+          echo "  DEPLOYMENT SUCCESSFUL"
+          echo "════════════════════════════════════════"
+          echo "  Image:    ${REGISTRY}/${{ env.ECR_REPO }}:${IMAGE_TAG}"
+          echo "  Cluster:  ${{ env.EKS_CLUSTER }}"
+          echo "  Namespace: ${{ env.NAMESPACE }}"
+          echo "════════════════════════════════════════"
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo ""
+          echo "════════════════════════════════════════"
+          echo "  DEPLOYMENT FAILED"
+          echo "  Rollback was triggered automatically"
+          echo "  Check the logs above for the error"
+          echo "════════════════════════════════════════"
