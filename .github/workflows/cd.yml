@@ -73,10 +73,10 @@ steps:
     run: |
       kubectl rollout status deployment/churn-model-v1 \
       -n ml-production \
-      --timeout=300s
+      --timeout=600s
 
   - name: Verify Deployment
     run: |
       kubectl get pods -n ml-production
       kubectl get deployment -n ml-production
-```
+      kubectl get svc -n ml-production
