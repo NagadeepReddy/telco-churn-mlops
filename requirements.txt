@@ -2,5 +2,7 @@ fastapi
 uvicorn
 pandas
 scikit-learn
+prometheus-client
 numpy
-prometheus_client
+pydantic
+pytest
