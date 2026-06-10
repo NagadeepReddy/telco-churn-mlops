@@ -40,8 +40,8 @@ spec:
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 1        # can temporarily have 3 pods during update
-      maxUnavailable: 0  # never go below 2 pods during update
+      maxSurge: 0        # can temporarily have 3 pods during update
+      maxUnavailable: 1  # never go below 2 pods during update
 
   template:
     metadata:
