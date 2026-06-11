@@ -133,19 +133,91 @@ def ready():
         "model_loaded": model is not None,
         "feature_count": len(features)
     }
+def predict_customer(row):
 
+    contract_map = {
+        "Month-to-month": 0,
+        "One year": 1,
+        "Two year": 2
+    }
+
+    if isinstance(row.get("Contract"), str):
+        row["Contract"] = contract_map.get(row["Contract"], 0)
+
+    yes_no_map = {
+        "Yes": 1,
+        "No": 0
+    }
+
+    for col in [
+        "Partner",
+        "Dependents",
+        "PhoneService",
+        "PaperlessBilling"
+    ]:
+        if isinstance(row.get(col), str):
+            row[col] = yes_no_map.get(row[col], 0)
+
+    X = pd.DataFrame([row])[features]
+
+    probability = float(model.predict_proba(X)[0][1])
+
+    prediction = int(probability >= 0.5)
+
+    if probability >= 0.75:
+        risk_tier = "CRITICAL"
+    elif probability >= 0.50:
+        risk_tier = "HIGH"
+    elif probability >= 0.25:
+        risk_tier = "MEDIUM"
+    else:
+        risk_tier = "LOW"
+
+    return {
+        "prediction": prediction,
+        "probability": probability,
+        "risk_tier": risk_tier,
+        "model_version": MODEL_VERSION
+    }
 # --------------------------------------------------
 # Predict
 # --------------------------------------------------
 
 @app.post("/predict")
-async def predict(data: PredictionRequest):
+async def predict(data: dict):
 
     start_time = time.time()
 
     try:
 
-        raw = data.model_dump()
+        # ------------------------------------------
+        # Seldon request format
+        # ------------------------------------------
+        if "data" in data:
+
+            names = data["data"]["names"]
+            values = data["data"]["ndarray"][0]
+
+            raw = {
+                "tenure": int(
+                    values[names.index("tenure")]
+                ),
+                "MonthlyCharges": float(
+                    values[names.index("MonthlyCharges")]
+                ),
+                "Contract": str(
+                    values[names.index("Contract")]
+                )
+            }
+
+        # ------------------------------------------
+        # Normal FastAPI request format
+        # ------------------------------------------
+        else:
+
+            request_obj = PredictionRequest(**data)
+
+            raw = request_obj.model_dump()
 
         row = {**DEFAULTS, **raw}
 
@@ -235,7 +307,6 @@ async def predict(data: PredictionRequest):
             status_code=500,
             detail=str(e)
         )
-
 # --------------------------------------------------
 # Metrics
 # --------------------------------------------------
@@ -246,3 +317,47 @@ def metrics():
         generate_latest(),
         media_type=CONTENT_TYPE_LATEST
     )
+    
+    
+@app.post("/api/v1.0/predictions")
+async def seldon_predict(request: dict):
+
+    data = request.get("data", {})
+    names = data.get("names", [])
+    ndarray = data.get("ndarray", [])
+
+    if not ndarray:
+        return {
+            "data": {
+                "names": ["prediction"],
+                "ndarray": []
+            }
+        }
+
+    if isinstance(ndarray[0], list):
+        values = ndarray[0]
+    else:
+        values = ndarray
+
+    row = dict(zip(names, values))
+
+    row = {**DEFAULTS, **row}
+
+    result = predict_customer(row)
+
+    return {
+        "data": {
+            "names": [
+                "prediction",
+                "probability",
+                "risk_tier",
+                "model_version"
+            ],
+            "ndarray": [[
+                result["prediction"],
+                result["probability"],
+                result["risk_tier"],
+                result["model_version"]
+            ]]
+        }
+    }

@@ -28,7 +28,7 @@ spec:
     kind: Deployment
     name: churn-model-v1
 
-  minReplicas: 2
+  minReplicas: 1
   maxReplicas: 2
   metrics:
     # Scale on CPU

@@ -1,0 +1,67 @@
+apiVersion: machinelearning.seldon.io/v1
+kind: SeldonDeployment
+
+metadata:
+  name: churn-canary
+  namespace: ml-production
+
+spec:
+  name: churn-canary
+
+  predictors:
+
+  - name: v1
+    replicas: 1
+    traffic: 90
+
+    graph:
+      name: churn-model
+      type: MODEL
+      endpoint:
+        type: REST
+
+    componentSpecs:
+    - spec:
+        containers:
+        - name: churn-model
+          image: 112277641321.dkr.ecr.us-east-1.amazonaws.com/churn-model:v1
+          imagePullPolicy: Always
+
+          env:
+          - name: PREDICTIVE_UNIT_SERVICE_PORT
+            value: "8080"
+
+          - name: MODEL_VERSION
+            value: "v1"
+
+          ports:
+          - containerPort: 8080
+            name: http
+
+  - name: v2
+    replicas: 1
+    traffic: 10
+
+    graph:
+      name: churn-model
+      type: MODEL
+      endpoint:
+        type: REST
+
+    componentSpecs:
+    - spec:
+        containers:
+        - name: churn-model
+          image: 112277641321.dkr.ecr.us-east-1.amazonaws.com/churn-model:v2
+          imagePullPolicy: Always
+
+          env:
+          - name: PREDICTIVE_UNIT_SERVICE_PORT
+            value: "8080"
+
+          - name: MODEL_VERSION
+            value: "v2"
+
+          ports:
+          - containerPort: 8080
+            name: http

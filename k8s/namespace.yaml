@@ -36,7 +36,7 @@ spec:
   hard:
     requests.cpu:    "4"      # total CPU requested by all pods
     requests.memory: 8Gi      # total RAM requested by all pods
-    limits.cpu:      "8"      # total CPU limit for all pods
+    limits.cpu:      "12"      # total CPU limit for all pods
     limits.memory:   16Gi     # total RAM limit for all pods
     pods:            "20"     # max number of pods
 
